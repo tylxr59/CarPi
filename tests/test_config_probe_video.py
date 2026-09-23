@@ -18,6 +18,7 @@ from carpi.iap2 import (
     Session,
 )
 from carpi.probe import Probe, State
+from carpi.transport import SocketTransport
 from carpi.video import frame
 
 
@@ -86,7 +87,7 @@ class BasicTests(unittest.TestCase):
             for seq, msg in enumerate(messages, start=1)
         ]
         sock = FakeSocket(chunks)
-        self.assertEqual(Probe(sock).run(), State.AUTH_UNVERIFIED)
+        self.assertEqual(Probe(SocketTransport(sock)).run(), State.AUTH_UNVERIFIED)
         sent_ids = []
         for wire in sock.sent[1:]:
             packet = Packet.decode(wire)

@@ -8,8 +8,12 @@
 
 Development without install: `PYTHONPATH=src python3 -m carpi --version` and `make test`. The package uses Python 3.11+ standard library. No Docker, desktop, or Apple files are needed.
 
+## Wired development path
+
+Follow [wired USB workflow](wired-usb.md) after installation: `sudo carpi usb doctor`, `sudo carpi usb setup`, `sudo carpi usb trace`, then `sudo carpi usb teardown`. Start with a Linux/macOS test computer. The development NCM gadget has not been verified on Pi hardware and does not implement the iPhone mux or CarPlay session.
+
 ## Captures
 
-`sudo ./scripts/capture.sh bluetooth [output-dir]` uses `btmon`; `network wlan0` uses `tcpdump`; `usb usbmon1` is reserved for later gadget work. Captures stay local. They can contain BT addresses, credentials and location-related data; sanitize before sharing. In Wireshark, open the `.snoop` or `.pcap` file and filter `bthci_acl`, `btatt`, `tcp`, or `usb` as appropriate. If `usbmon` is absent, load it explicitly with `sudo modprobe usbmon` only for that capture session.
+`sudo ./scripts/capture.sh bluetooth [output-dir]` uses `btmon`; `network wlan0` uses `tcpdump`. `sudo carpi capture network` selects the active NCM interface. `sudo carpi capture usb` uses `usbmon0`, but Pi-side usbmon may not expose gadget requests; see [wired workflow](wired-usb.md) for host-side capture. Captures stay local and can contain identifiers, credentials and location data; sanitize before sharing.
 
 The earliest meaningful vehicle report should include: OS/kernel, BlueZ version, detected RFCOMM channel/service name, final probe state, any parser error, and whether the Subaru requested user confirmation. Do not paste raw authentication payloads.

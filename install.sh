@@ -4,10 +4,12 @@ set -euo pipefail
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 DRY_RUN=0
 DEV=0
+ENABLE_USB=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --dev) DEV=1 ;;
+    --enable-usb-gadget) ENABLE_USB=1 ;;
     *) echo "Unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -65,6 +67,27 @@ run install -m 0755 "$WRAPPER" /usr/local/bin/carpi
 backup_if_different "$ROOT_DIR/systemd/carpi.service" /etc/systemd/system/carpi.service
 run install -m 0644 "$ROOT_DIR/systemd/carpi.service" /etc/systemd/system/carpi.service
 run systemctl daemon-reload
+if [[ $ENABLE_USB -eq 1 ]]; then
+  BOOT_CONFIG=/boot/firmware/config.txt
+  if [[ ! -f $BOOT_CONFIG ]]; then
+    echo "Cannot find $BOOT_CONFIG; USB overlay unchanged" >&2
+    exit 1
+  fi
+  if compgen -G '/sys/class/udc/*' >/dev/null; then
+    echo "UDC already present; boot configuration unchanged."
+  elif grep -Eq '^[[:space:]]*dtoverlay=dwc2([,[:space:]]|$)' "$BOOT_CONFIG"; then
+    echo "dwc2 overlay already configured; inspect USB role and reboot if needed. No edit made."
+  else
+    BACKUP="${BOOT_CONFIG}.carpi-bak.$(date -u +%Y%m%dT%H%M%SZ)"
+    run cp -a -- "$BOOT_CONFIG" "$BACKUP"
+    if [[ $DRY_RUN -eq 1 ]]; then
+      echo "[dry-run] append [all] and dtoverlay=dwc2,dr_mode=peripheral to $BOOT_CONFIG"
+    else
+      printf '\n[all]\ndtoverlay=dwc2,dr_mode=peripheral\n' >>"$BOOT_CONFIG"
+    fi
+    echo "dwc2 peripheral overlay added; reboot required. Backup: $BACKUP"
+  fi
+fi
 echo "Installed carpi. Bluetooth uses root privileges via sudo; no setcap or BlueZ changes needed."
 echo "Service installed but not enabled or started. Next: scripts/doctor.sh; sudo carpi probe --target MAC"
-echo "No pairing, network changes, USB gadget setup, or credential storage performed."
+echo "No pairing, USB gadget binding, or credential storage performed."

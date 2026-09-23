@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import secrets
-import socket
 import time
 from enum import Enum, auto
 
@@ -26,6 +25,7 @@ from carpi.iap2 import (
     ProtocolError,
     summary,
 )
+from carpi.transport import Iap2Transport
 
 LOG = logging.getLogger("carpi")
 
@@ -53,10 +53,11 @@ ALLOWED = {
 
 
 class Probe:
-    def __init__(self, sock: socket.socket, timeout: float = 20) -> None:
+    def __init__(self, sock: Iap2Transport, timeout: float = 20, label: str = "bt") -> None:
         self.sock = sock
         self.sock.settimeout(timeout)
         self.timeout = timeout
+        self.label = label
         self.state = State.CONNECTED
         self.frames = PacketStream()
         self.messages = MessageStream()
@@ -160,7 +161,7 @@ class Probe:
         self.send(ACK, Message(identifier, parameters).encode(), self.control_session, True)
 
     def run(self) -> State:
-        LOG.info("[bt] RFCOMM connected")
+        LOG.info("[%s] transport connected", self.label)
         self.transition(State.MARKER)
         self.sock.sendall(MARKER)
         marker = bytearray()

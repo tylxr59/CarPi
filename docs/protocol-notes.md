@@ -1,5 +1,9 @@
 # Protocol evidence ledger
 
+## Wired USB boundary
+
+**VERIFIED:** Local iAP2 framing and probe consume a byte-stream interface. Bluetooth uses `SocketTransport`; `EndpointTransport` handles partial I/O for a future USB endpoint. No phone-side USB mux/lockdown/carkit implementation is attached. **UPSTREAM-OBSERVED:** one real iPhone exposes a later mux/NCM configuration after `0xC0/0x52`; see [wired research](wired-usb-research.md). **HYPOTHESIS:** the Subaru follows a compatible sequence. **TODO:** capture its requests, implement a phone-side EP0/configuration path, then mux/iAP2 and a shared CarPlay-over-IP session. The W1 NCM link is an independent enumeration test.
+
 Labels refer to evidence for **this repository**, not a claim that upstream behavior works with the Subaru.
 
 ## VERIFIED (locally, synthetic tests only)

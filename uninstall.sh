@@ -8,6 +8,9 @@ run() {
   if [[ $DRY_RUN -eq 1 ]]; then printf '[dry-run]'; printf ' %q' "$@"; printf '\n';
   else "$@"; fi
 }
+if [[ -d /sys/kernel/config/usb_gadget/carpi && -x /usr/local/bin/carpi ]]; then
+  run /usr/local/bin/carpi usb teardown
+fi
 if [[ -f /etc/systemd/system/carpi.service ]] && grep -q '^# Installed by carpi$' /etc/systemd/system/carpi.service; then
   run systemctl disable --now carpi.service
   run rm -f /etc/systemd/system/carpi.service
@@ -17,7 +20,7 @@ if [[ -f /usr/local/bin/carpi ]] && grep -q '^# Installed by carpi$' /usr/local/
   run rm -f /usr/local/bin/carpi
 fi
 if [[ -f /usr/local/lib/carpi/carpi/__init__.py ]]; then
-  for name in __init__.py __main__.py bluetooth.py cli.py config.py iap2.py probe.py video.py; do
+  for name in __init__.py __main__.py bluetooth.py cli.py config.py iap2.py probe.py video.py transport.py usb.py; do
     if [[ -f /usr/local/lib/carpi/carpi/$name ]]; then
       run rm -f "/usr/local/lib/carpi/carpi/$name"
     fi

@@ -18,7 +18,10 @@ The eventual “Hello World” means a Pi-generated frame with `Hello World`, `c
 | H.264 test-frame generation | Local PPM and H.264 demo implemented; FFmpeg integration needs Pi test |
 | Video on vehicle display | Missing |
 | Touch input, audio | Not targeted yet |
-| Wired USB transport | Future; no gadget setup command yet |
+| Wired USB W1: generic NCM enumeration | ConfigFS setup/status/trace/teardown implemented; Pi and PC test pending |
+| Wired USB W2: Subaru recognition / EP0 capture | Pending hardware test; Pi-side ConfigFS cannot show all host control requests |
+| Wired USB W3–W5: Apple configuration, mux/iAP2, CarPlay NCM | Research only; no phone-role mux or authenticated session |
+| Shared CarPlay-over-IP / Hello World on vehicle | Missing for both transports; local video demo remains separate |
 
 ## Quick start
 
@@ -44,6 +47,8 @@ sudo ./uninstall.sh --dry-run
 ```
 
 `video-demo` defaults to software `libx264`; `--encoder h264_v4l2m2m` attempts a Pi hardware path. Neither sends bytes to the vehicle. The installer neither starts nor enables its idle systemd unit.
+
+For reversible wired development, run `sudo carpi usb doctor`, `sudo carpi usb setup` (confirm separate power), `sudo carpi usb trace`, and `sudo carpi usb teardown`. Start with a Linux/macOS host to verify generic NCM enumeration. See [wired workflow](docs/wired-usb.md) and [wired research](docs/wired-usb-research.md). The optional `sudo ./install.sh --enable-usb-gadget` makes a backed-up `dwc2` boot edit only if needed. No USB service starts automatically.
 
 See [bring-up](docs/bringup.md), [architecture](docs/architecture.md), [protocol notes](docs/protocol-notes.md), [upstream research](docs/upstream-research.md), and [troubleshooting](docs/troubleshooting.md).
 
