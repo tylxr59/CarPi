@@ -44,7 +44,7 @@ backup_if_different() {
   fi
 }
 
-packages=(python3 bluez ffmpeg tcpdump usbutils rfkill)
+packages=(python3 python3-dbus python3-gi gir1.2-glib-2.0 bluez ffmpeg tcpdump usbutils rfkill)
 if [[ $DEV -eq 1 ]]; then packages+=(shellcheck python3-pytest); fi
 run apt-get update
 run apt-get install -y "${packages[@]}"
@@ -88,6 +88,6 @@ if [[ $ENABLE_USB -eq 1 ]]; then
     echo "dwc2 peripheral overlay added; reboot required. Backup: $BACKUP"
   fi
 fi
-echo "Installed carpi. Bluetooth uses root privileges via sudo; no setcap or BlueZ changes needed."
+echo "Installed carpi. Bluetooth profile registration uses the system D-Bus and root via sudo."
 echo "Service installed but not enabled or started. Next: scripts/doctor.sh; sudo carpi probe --target MAC"
 echo "No pairing, USB gadget binding, or credential storage performed."

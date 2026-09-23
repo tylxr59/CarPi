@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from carpi import __version__, bluetooth
 from carpi.config import MAC, load
-from carpi.probe import Probe
+from carpi.probe import Authentication, Probe, State
 from carpi.transport import SocketTransport
 from carpi.usb import UsbGadget
 from carpi.video import encode_demo, write_ppm
@@ -31,11 +32,18 @@ def parser() -> argparse.ArgumentParser:
     probe = commands.add_parser("probe", help="connect as phone/client over Bluetooth RFCOMM")
     probe.add_argument("--target", help="vehicle Bluetooth MAC")
     probe.add_argument("--channel", type=int, help="RFCOMM channel; otherwise inspect SDP")
+    probe.add_argument(
+        "--allow-unverified-accessory",
+        action="store_true",
+        help="research only: continue after a structurally valid but unverified auth response",
+    )
     probe.add_argument("-v", action="count", default=0, dest="verbose")
     commands.add_parser(
         "discover", help="list BlueZ-known devices; pair separately with bluetoothctl"
     )
     commands.add_parser("daemon", help="idle service scaffold; never initiates vehicle contact")
+    bt = commands.add_parser("bluetooth", help="read-only BlueZ diagnostics")
+    bt.add_subparsers(dest="bluetooth_command", required=True).add_parser("doctor")
     picture = commands.add_parser("frame", help="write local Hello World PPM image")
     picture.add_argument("--output", type=Path, required=True)
     video = commands.add_parser("video-demo", help="encode local H.264 sample; does not stream")
@@ -50,7 +58,7 @@ def parser() -> argparse.ArgumentParser:
         "--separate-power", action="store_true", help="confirm Pi is powered independently"
     )
     capture = commands.add_parser("capture", help="local, private packet capture")
-    capture.add_argument("kind", choices=["usb", "network"])
+    capture.add_argument("kind", choices=["usb", "network", "bluetooth"])
     capture.add_argument("--interface", help="usbmonN or network interface; auto-select if omitted")
     capture.add_argument("--output-dir", type=Path, default=Path("captures"))
     return root
@@ -109,18 +117,25 @@ def _usb_command(args: argparse.Namespace) -> int:
 
 def _capture(args: argparse.Namespace) -> int:
     _require_root()
-    if not shutil.which("tcpdump"):
-        raise RuntimeError("tcpdump missing")
-    gadget = UsbGadget()
-    iface = args.interface or (
-        "usbmon0" if args.kind == "usb" else gadget.net_status().get("interface")
-    )
-    if not iface:
-        raise RuntimeError("no active NCM interface; specify --interface")
-    if args.kind == "usb" and not re.fullmatch(r"usbmon[0-9]+", iface):
-        raise ValueError("USB interface must be usbmonN")
-    if args.kind == "network" and not re.fullmatch(r"[a-zA-Z0-9_.-]{1,15}", iface):
-        raise ValueError("invalid network interface")
+    if args.kind == "bluetooth":
+        if args.interface:
+            raise ValueError("Bluetooth capture does not accept --interface")
+        if not shutil.which("btmon"):
+            raise RuntimeError("btmon missing (install bluez)")
+        iface = "Bluetooth"
+    else:
+        if not shutil.which("tcpdump"):
+            raise RuntimeError("tcpdump missing")
+        gadget = UsbGadget()
+        iface = args.interface or (
+            "usbmon0" if args.kind == "usb" else gadget.net_status().get("interface")
+        )
+        if not iface:
+            raise RuntimeError("no active NCM interface; specify --interface")
+        if args.kind == "usb" and not re.fullmatch(r"usbmon[0-9]+", iface):
+            raise ValueError("USB interface must be usbmonN")
+        if args.kind == "network" and not re.fullmatch(r"[a-zA-Z0-9_.-]{1,15}", iface):
+            raise ValueError("invalid network interface")
     if args.output_dir.is_symlink():
         raise ValueError("capture directory must not be a symlink")
     args.output_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -130,7 +145,7 @@ def _capture(args: argparse.Namespace) -> int:
         )
     fd, output_name = tempfile.mkstemp(
         prefix=f"carpi-{args.kind}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-",
-        suffix=".pcap",
+        suffix=".snoop" if args.kind == "bluetooth" else ".pcap",
         dir=args.output_dir,
     )
     os.close(fd)
@@ -143,8 +158,10 @@ def _capture(args: argparse.Namespace) -> int:
     print(f"[capture] {iface} -> {filename}; Ctrl+C to stop", flush=True)
     old_umask = os.umask(0o077)
     try:
-        return subprocess.call(
-            [
+        command = (
+            ["btmon", "-w", str(filename)]
+            if args.kind == "bluetooth"
+            else [
                 "tcpdump",
                 "-i",
                 iface,
@@ -154,8 +171,110 @@ def _capture(args: argparse.Namespace) -> int:
                 str(filename),
             ]
         )
+        return subprocess.call(command)
     finally:
         os.umask(old_umask)
+
+
+class Terminated(Exception):
+    pass
+
+
+def _probe_summary(connected: bool, probe: Probe | None, failure: str | None) -> str:
+    state = probe.state if probe else None
+    link_ok = state in {
+        State.NEGOTIATED,
+        State.IDENTIFYING,
+        State.IDENTIFIED,
+        State.AUTHENTICATING,
+        State.AUTH_UNVERIFIED,
+        State.AUTH_UNVERIFIED_ACCEPTED,
+        State.WIFI_OBSERVING,
+        State.WIFI_RECEIVED,
+    }
+    identified = state in {
+        State.IDENTIFIED,
+        State.AUTHENTICATING,
+        State.AUTH_UNVERIFIED,
+        State.AUTH_UNVERIFIED_ACCEPTED,
+        State.WIFI_OBSERVING,
+        State.WIFI_RECEIVED,
+    }
+    auth = probe.authentication if probe else Authentication.NOT_REACHED
+    auth_text = {
+        Authentication.NOT_REACHED: "NOT REACHED",
+        Authentication.VERIFIED: "VERIFIED",
+        Authentication.UNVERIFIED_STOPPED: "UNVERIFIED - stopped",
+        Authentication.UNVERIFIED_ACCEPTED: "UNVERIFIED - accepted by research flag",
+        Authentication.FAILED: "FAILED",
+    }[auth]
+    rows = [
+        ("Bluetooth connection", "OK" if connected else "FAILED"),
+        ("iAP2 link negotiation", "OK" if link_ok else "FAILED" if probe else "NOT ATTEMPTED"),
+        ("Identification", "OK" if identified else "NOT COMPLETED"),
+        ("Accessory authentication", auth_text),
+        ("Wi-Fi config received", "YES" if probe and probe.wifi_received else "NO"),
+        ("CarPlay IP session", "NOT ATTEMPTED"),
+    ]
+    if failure:
+        stage = (
+            "Bluetooth setup/connection"
+            if not connected
+            else "SYN/SYN-ACK negotiation"
+            if not link_ok
+            else "Identification"
+            if not identified
+            else "Wi-Fi configuration"
+            if state in {State.WIFI_OBSERVING, State.WIFI_RECEIVED}
+            else "Accessory authentication"
+            if state is State.AUTHENTICATING
+            else "Probe"
+        )
+        rows.append(("Failure stage", stage))
+        rows.append(("Failure detail", failure))
+    return "CarPi probe result\n\n" + "\n".join(f"{key:<26} {value}" for key, value in rows)
+
+
+def _run_probe(args: argparse.Namespace, target: str) -> int:
+    level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=level, format="%(message)s", stream=sys.stdout)
+    connected = False
+    probe: Probe | None = None
+    failure: str | None = None
+    previous_term = signal.getsignal(signal.SIGTERM)
+
+    def terminate(_signum: int, _frame: object) -> None:
+        raise Terminated("SIGTERM received")
+
+    signal.signal(signal.SIGTERM, terminate)
+    try:
+        logging.info("[bt] target %s", target)
+        with bluetooth.BluetoothSession() as session:
+            channel = session.channel(target, args.channel)
+            with session.connect(target, channel) as sock:
+                connected = True
+                try:
+                    probe = Probe(
+                        SocketTransport(sock),
+                        allow_unverified_accessory=args.allow_unverified_accessory,
+                    )
+                    probe.run()
+                finally:
+                    logging.info("[bt] disconnecting")
+        return 0
+    except KeyboardInterrupt:
+        failure = "interrupted by Ctrl+C"
+        return 130
+    except Terminated as error:
+        failure = str(error)
+        return 143
+    except Exception as error:
+        failure = str(error)
+        logging.error("[carpi] %s", error)
+        return 1
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+        print(_probe_summary(connected, probe, failure), flush=True)
 
 
 def main() -> int:
@@ -165,6 +284,9 @@ def main() -> int:
         config = load(args.config or (default_config if default_config.is_file() else None))
         if args.command == "usb":
             return _usb_command(args)
+        if args.command == "bluetooth":
+            _print_fields(bluetooth.doctor())
+            return 0
         if args.command == "capture":
             return _capture(args)
         if args.command == "daemon":
@@ -195,16 +317,7 @@ def main() -> int:
             raise ValueError("probe requires --target MAC or [vehicle].bluetooth_mac")
         if args.channel is not None and not 1 <= args.channel <= 30:
             raise ValueError("RFCOMM channel must be 1..30")
-        level = logging.DEBUG if args.verbose else logging.INFO
-        logging.basicConfig(level=level, format="%(message)s", stream=sys.stdout)
-        channel = args.channel or bluetooth.select_channel(bluetooth.sdp_channels(target))
-        logging.info("[bt] connecting to %s channel %d", target, channel)
-        with bluetooth.connect(target, channel) as sock:
-            state = Probe(SocketTransport(sock)).run()
-        print(
-            f"[auth] stopped at {state.name.lower()}; no Wi-Fi handoff or CarPlay session claimed"
-        )
-        return 0
+        return _run_probe(args, target)
     except KeyboardInterrupt:
         return 130
     except (OSError, ValueError, RuntimeError, TimeoutError, ConnectionError) as error:

@@ -12,6 +12,9 @@ if command -v rfkill >/dev/null; then
 else
   echo "rfkill: missing"
 fi
+if command -v carpi >/dev/null; then
+  carpi bluetooth doctor || true
+fi
 if command -v lsmod >/dev/null; then
   lsmod | awk 'NR==1 || /^(bluetooth|btusb|hci_uart|rfcomm)[[:space:]]/'
 fi

@@ -7,12 +7,12 @@ The eventual “Hello World” means a Pi-generated frame with `Hello World`, `c
 | Component | Status |
 | --- | --- |
 | Pi 4 environment detection | Implemented; validate with `scripts/doctor.sh` on Pi |
-| Bluetooth device listing / SDP | Implemented; needs Pi + vehicle test |
+| Bluetooth device listing / SDP and local iAP2 profile | Implemented; needs Pi + vehicle test |
 | RFCOMM client transport | Implemented; needs Pi + vehicle test |
 | iAP2 framing, checksums, SYN/ACK | Unit tested; vehicle negotiation unverified |
 | Identification | Probe sends/receives messages; vehicle acceptance unverified |
-| Authentication | Requests cert/challenge response, **does not verify**; stops there |
-| Wi-Fi handoff | 0x5703 parser/redaction only; not requested or connected |
+| Authentication | Requests cert/challenge response, **does not verify**; stops by default. Explicit research flag can continue unverified |
+| Wi-Fi handoff | Research flag requests 0x5703 and reports SSID with password redacted; no network connection |
 | CarPlay IP discovery | Research/design only |
 | AirPlay pairing and RTSP | Missing |
 | H.264 test-frame generation | Local PPM and H.264 demo implemented; FFmpeg integration needs Pi test |
@@ -34,10 +34,22 @@ sudo ./install.sh --dry-run
 sudo ./install.sh
 ./scripts/doctor.sh
 carpi discover
+sudo carpi bluetooth doctor
 sudo carpi probe --target AA:BB:CC:DD:EE:FF -vv
 ```
 
-Pair/trust the vehicle through `bluetoothctl` first if required. `--channel N` overrides SDP selection. The probe contacts the specified vehicle only when invoked. It stops after receiving an unverified authentication response. `-vv` logs packet **metadata**, not credential payloads. Installed configuration at `/etc/carpi/carpi.toml` loads automatically if present; `--config PATH` selects another file. Repository runs use `PYTHONPATH=src python3 -m carpi ...`.
+Pair/trust the vehicle through `bluetoothctl` first if required. `--channel N` overrides SDP selection. The probe temporarily registers the local iAP2 UUID through BlueZ, powers and exposes the adapter if needed, then restores its prior state on exit. It contacts the specified vehicle only when invoked. It stops after receiving an unverified authentication response by default. `--allow-unverified-accessory` is an explicit research-only continuation; it **does not verify MFi authentication**. `-vv` logs packet **metadata**, not credential payloads. Installed configuration at `/etc/carpi/carpi.toml` loads automatically if present; `--config PATH` selects another file. Repository runs use `PYTHONPATH=src python3 -m carpi ...`.
+
+## First vehicle test
+
+1. Boot the Pi with its own power supply and SSH in.
+2. Run read-only diagnostics: `sudo carpi bluetooth doctor` and `./scripts/doctor.sh` from the checkout. Confirm rfkill is unblocked and the adapter is visible.
+3. In a separate SSH session, optionally start a local capture: `sudo carpi capture bluetooth --output-dir captures`. Stop it with Ctrl+C after the probes. Captures may contain device identifiers, pairing information, protocol payloads, and credentials. Keep them private; CarPi never uploads them.
+4. Run the normal probe first: `sudo carpi probe --target AA:BB:CC:DD:EE:FF -vv`. Save the terminal output and its final state summary. Replace the MAC with your Subaru's address.
+5. If the normal probe reaches `Accessory authentication  UNVERIFIED - stopped`, run `sudo carpi probe --target AA:BB:CC:DD:EE:FF --allow-unverified-accessory -vv`. Save this output and final state summary too. A Wi-Fi SSID may appear; its password stays redacted.
+6. Stop the capture. Save the `.snoop` file locally with both probe logs, diagnostic output, time of test, and any pairing/connection observations. Review and redact before sharing. Do not proceed into CarPlay-over-IP yet.
+
+The read-only doctor shows BlueZ version, adapter path and state, UUIDs, rfkill and ProfileManager availability. It cannot prove profile registration without changing the system; the probe reports a real registration success or failure. On the first car test, note whether the vehicle sees the Pi, whether RFCOMM connects, and the first failing summary stage. The local profile currently rejects unexpected inbound RFCOMM connections; that path needs a vehicle capture before it can be handled correctly.
 
 ```sh
 PYTHONPATH=src python3 -m carpi frame --output hello.ppm

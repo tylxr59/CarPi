@@ -15,7 +15,7 @@ Labels refer to evidence for **this repository**, not a claim that upstream beha
 ## UPSTREAM-OBSERVED (behavioral reference)
 
 - [HaToan/carplay-wifi-extractor](https://github.com/HaToan/carplay-wifi-extractor) includes a **client/fake-iPhone** RFCOMM path, iAP2 link negotiation, `StartIdentification` → `IdentificationInformation` → `IdentificationAccepted`, `0xAA00` certificate request, `0xAA02` challenge request and `0x5702` Wi-Fi information request. Its sample client calls auth successful without verifying the accessory signature; this project deliberately does not.
-- Its `0x5703` schema maps TLV 1 to SSID and TLV 2 to passphrase. `carpi` only displays SSID and `[REDACTED]` if such a message arrives unsolicited. It does not request Wi-Fi or persist it.
+- Its `0x5703` schema maps TLV 1 to SSID and TLV 2 to passphrase. With explicit `--allow-unverified-accessory`, `carpi` requests `0x5703` after the unverified auth response, displays SSID and `[REDACTED]`, and never joins or persists Wi-Fi.
 - [lvalen91/carplayd](https://github.com/lvalen91/carplayd) has a Pi **accessory/head-unit** stack and device-verified receiver video. It documents link framing, iAP2 messages, NCM, FunctionFS, pairing/RTSP on the *receiver side* and Pi 4 USB role handling. Receiver success does not verify this phone-source path.
 - [doubletake](https://github.com/omarroth/doubletake) implements generic AirPlay **sender** pairing, RTSP, timing, event and video pathways. It targets AirPlay receivers such as Apple TV. Whether Subaru CarPlay accepts the same sender sequence is unknown.
 
@@ -34,6 +34,6 @@ Labels refer to evidence for **this repository**, not a claim that upstream beha
 ## HYPOTHESIS / TODO
 
 - The Subaru may require Bluetooth pairing/profile registration, a different control session version or a different link opening order. The probe currently uses a deliberately small stop-on-error sequence rather than full retransmission/EAK windows. Test with captures and adapt only to observed behavior.
-- MFi validation requires an authorized/distributable trust anchor and correct signature verification. A received certificate and response alone are **not** authentication. Do not send `0xAA05` prematurely.
+- MFi validation requires an authorized/distributable trust anchor and correct signature verification. A received certificate and response alone are **not** verified authentication. The default probe never sends `0xAA05`; the explicit research flag does so only after a structurally valid response and labels the state unverified.
 - Wi-Fi handoff likely precedes CarPlay IP discovery. Determine whether the IVI is an access point, whether the Pi must join it, and which mDNS service appears. Do not assume ordinary `_airplay._tcp` service means CarPlay source authorization.
 - CarPlay sender RTSP `SETUP` fields, pair-setup/verify variant, timing, event channel, H.264 encryption/packetization, geometry and touch path must be established from authorized reference/trace work. iAP2 may continue carrying state/status after Wi-Fi handoff. Each unknown needs a test against real hardware; do not infer success from the standalone H.264 sample.

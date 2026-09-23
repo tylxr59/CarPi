@@ -1,8 +1,4 @@
-"""Conservative phone-role iAP2 probe.
-
-Stops after receiving an MFi response. It deliberately does not claim that the
-response is valid or send AuthenticationSucceeded without certificate validation.
-"""
+"""Phone-role iAP2 research probe with explicit unverified-auth opt-in."""
 
 from __future__ import annotations
 
@@ -39,6 +35,17 @@ class State(Enum):
     IDENTIFIED = auto()
     AUTHENTICATING = auto()
     AUTH_UNVERIFIED = auto()
+    AUTH_UNVERIFIED_ACCEPTED = auto()
+    WIFI_OBSERVING = auto()
+    WIFI_RECEIVED = auto()
+
+
+class Authentication(Enum):
+    NOT_REACHED = auto()
+    VERIFIED = auto()  # Reserved for a future cryptographic verifier.
+    UNVERIFIED_STOPPED = auto()
+    UNVERIFIED_ACCEPTED = auto()
+    FAILED = auto()
 
 
 ALLOWED = {
@@ -49,16 +56,29 @@ ALLOWED = {
     State.IDENTIFYING: {State.IDENTIFIED},
     State.IDENTIFIED: {State.AUTHENTICATING},
     State.AUTHENTICATING: {State.AUTH_UNVERIFIED},
+    State.AUTH_UNVERIFIED: {State.AUTH_UNVERIFIED_ACCEPTED},
+    State.AUTH_UNVERIFIED_ACCEPTED: {State.WIFI_OBSERVING},
+    State.WIFI_OBSERVING: {State.WIFI_RECEIVED},
 }
 
 
 class Probe:
-    def __init__(self, sock: Iap2Transport, timeout: float = 20, label: str = "bt") -> None:
+    def __init__(
+        self,
+        sock: Iap2Transport,
+        timeout: float = 20,
+        label: str = "bt",
+        allow_unverified_accessory: bool = False,
+    ) -> None:
         self.sock = sock
         self.sock.settimeout(timeout)
         self.timeout = timeout
         self.label = label
+        self.allow_unverified_accessory = allow_unverified_accessory
         self.state = State.CONNECTED
+        self.authentication = Authentication.NOT_REACHED
+        self.wifi_received = False
+        self.wifi_ssid: str | None = None
         self.frames = PacketStream()
         self.messages = MessageStream()
         self.pending: list[Packet] = []
@@ -127,7 +147,10 @@ class Probe:
         deadline = time.monotonic() + self.timeout
         while time.monotonic() <= deadline:
             if self.pending_messages:
-                return self.pending_messages.pop(0)
+                message = self.pending_messages.pop(0)
+                if message.identifier == 0x5703:
+                    self.observe_wifi(message)
+                return message
             packet = self.prefetched.pop(0) if self.prefetched else self.receive()
             if (
                 packet.payload
@@ -141,6 +164,23 @@ class Probe:
                     self.pending_messages.extend(messages)
         raise TimeoutError("timed out awaiting control message")
 
+    def observe_wifi(self, message: Message) -> None:
+        for identifier in (1, 2, 3, 4):
+            if sum(p.identifier == identifier for p in message.parameters) > 1:
+                raise ProtocolError(f"duplicate wireless configuration field {identifier}")
+        ssids = [p.value for p in message.parameters if p.identifier == 1]
+        if len(ssids) != 1 or not ssids[0]:
+            raise ProtocolError("wireless configuration lacks one nonempty SSID")
+        for field in (3, 4):
+            if any(p.identifier == field and len(p.value) != 1 for p in message.parameters):
+                raise ProtocolError(f"invalid wireless configuration field {field}")
+        details = summary(message)
+        self.wifi_ssid = str(details["ssid"])
+        self.wifi_received = True
+        LOG.info("[wifi] wireless CarPlay configuration received")
+        LOG.info("[wifi] SSID: %s", self.wifi_ssid)
+        LOG.info("[wifi] password: %s", details["password"])
+
     def expect(self, identifier: int) -> Message:
         for _ in range(8):
             message = self.next_message()
@@ -148,9 +188,7 @@ class Probe:
                 return message
             if message.identifier in (0x1D03, 0xAA04):
                 raise ProtocolError(f"peer rejected stage with message 0x{message.identifier:04x}")
-            if message.identifier == 0x5703:
-                LOG.info("[wifi] unsolicited configuration: %s", summary(message))
-            else:
+            if message.identifier != 0x5703:
                 LOG.info("[iap2] interim message 0x%04x", message.identifier)
         raise ProtocolError(f"expected message 0x{identifier:04x}; too many interim messages")
 
@@ -161,7 +199,7 @@ class Probe:
         self.send(ACK, Message(identifier, parameters).encode(), self.control_session, True)
 
     def run(self) -> State:
-        LOG.info("[%s] transport connected", self.label)
+        LOG.info("[iap2] starting link negotiation")
         self.transition(State.MARKER)
         self.sock.sendall(MARKER)
         marker = bytearray()
@@ -210,6 +248,7 @@ class Probe:
         self.send_message(0x1D02)  # IdentificationAccepted, no credential claim
         self.transition(State.IDENTIFIED)
         self.transition(State.AUTHENTICATING)
+        self.authentication = Authentication.FAILED
         self.send_message(0xAA00)  # RequestAuthenticationCertificate
         certificate = self.expect(0xAA01)
         if not any(p.identifier == 0 and p.value for p in certificate.parameters):
@@ -219,7 +258,22 @@ class Probe:
         if not any(p.identifier == 0 and p.value for p in response.parameters):
             raise ProtocolError("empty authentication response")
         self.transition(State.AUTH_UNVERIFIED)
+        if not self.allow_unverified_accessory:
+            self.authentication = Authentication.UNVERIFIED_STOPPED
+            LOG.warning(
+                "[auth] response received but NOT verified; stopping before AuthenticationSucceeded"
+            )
+            return self.state
+        self.authentication = Authentication.UNVERIFIED_ACCEPTED
+        LOG.warning("[WARNING] Accessory authentication has NOT been cryptographically verified.")
         LOG.warning(
-            "[auth] response received but NOT verified; stopping before AuthenticationSucceeded"
+            "[WARNING] Continuing because --allow-unverified-accessory was explicitly requested."
         )
+        self.transition(State.AUTH_UNVERIFIED_ACCEPTED)
+        self.send_message(0xAA05)  # AuthenticationSucceeded: research assertion only.
+        self.transition(State.WIFI_OBSERVING)
+        if not self.wifi_received:
+            self.send_message(0x5702)  # RequestAccessoryWiFiConfigurationInformation.
+            self.expect(0x5703)
+        self.transition(State.WIFI_RECEIVED)
         return self.state

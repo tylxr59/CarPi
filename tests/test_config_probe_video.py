@@ -17,7 +17,7 @@ from carpi.iap2 import (
     ProtocolError,
     Session,
 )
-from carpi.probe import Probe, State
+from carpi.probe import Authentication, Probe, State
 from carpi.transport import SocketTransport
 from carpi.video import frame
 
@@ -87,7 +87,9 @@ class BasicTests(unittest.TestCase):
             for seq, msg in enumerate(messages, start=1)
         ]
         sock = FakeSocket(chunks)
-        self.assertEqual(Probe(SocketTransport(sock)).run(), State.AUTH_UNVERIFIED)
+        probe = Probe(SocketTransport(sock))
+        self.assertEqual(probe.run(), State.AUTH_UNVERIFIED)
+        self.assertEqual(probe.authentication, Authentication.UNVERIFIED_STOPPED)
         sent_ids = []
         for wire in sock.sent[1:]:
             packet = Packet.decode(wire)
@@ -95,6 +97,53 @@ class BasicTests(unittest.TestCase):
                 sent_ids.append(Message.decode(packet.payload).identifier)
         self.assertEqual(sent_ids, [0x1D00, 0x1D02, 0xAA00, 0xAA02])
         self.assertNotIn(0xAA05, sent_ids)
+
+    def test_explicit_unverified_auth_requests_wifi_and_redacts_password(self):
+        params = LinkParameters(8, 4096, 2000, 500, 3, 1, (Session(1, 0, 1),))
+        messages = (
+            Message(0x1D01, (TLV(0, b"Test IVI\0"),)),
+            Message(0xAA01, (TLV(0, b"certificate"),)),
+            Message(0xAA03, (TLV(0, b"signature"),)),
+            Message(0x5703, (TLV(1, b"Subaru-Test\0"), TLV(2, b"secret-password\0"))),
+        )
+        chunks = [
+            MARKER,
+            Packet(SYN, 0, 0, 0, params.encode()).encode(),
+            Packet(ACK, 0, 0, 0).encode(),
+        ]
+        chunks += [
+            Packet(ACK, seq, 0, 1, msg.encode()).encode()
+            for seq, msg in enumerate(messages, start=1)
+        ]
+        sock = FakeSocket(chunks)
+        probe = Probe(SocketTransport(sock), allow_unverified_accessory=True)
+        with self.assertLogs("carpi", level="INFO") as logs:
+            self.assertEqual(probe.run(), State.WIFI_RECEIVED)
+        self.assertEqual(probe.authentication, Authentication.UNVERIFIED_ACCEPTED)
+        self.assertTrue(probe.wifi_received)
+        self.assertEqual(probe.wifi_ssid, "Subaru-Test")
+        self.assertNotIn("secret-password", "\n".join(logs.output))
+        self.assertIn("[REDACTED]", "\n".join(logs.output))
+        sent_ids = [
+            Message.decode(Packet.decode(wire).payload).identifier
+            for wire in sock.sent[1:]
+            if Packet.decode(wire).payload and Packet.decode(wire).session == 1
+        ]
+        self.assertEqual(sent_ids[-2:], [0xAA05, 0x5702])
+
+    def test_unverified_state_is_distinct_from_verified(self):
+        probe = Probe(FakeSocket())
+        self.assertFalse(probe.allow_unverified_accessory)
+        self.assertEqual(probe.authentication, Authentication.NOT_REACHED)
+        self.assertNotEqual(Authentication.UNVERIFIED_ACCEPTED, Authentication.VERIFIED)
+
+    def test_wifi_configuration_requires_one_ssid(self):
+        probe = Probe(FakeSocket())
+        with self.assertRaisesRegex(ProtocolError, "SSID"):
+            probe.observe_wifi(Message(0x5703, (TLV(2, b"secret"),)))
+        with self.assertRaisesRegex(ProtocolError, "duplicate"):
+            probe.observe_wifi(Message(0x5703, (TLV(1, b"one"), TLV(1, b"two"))))
+        self.assertFalse(probe.wifi_received)
 
     def test_generated_frame_changes_with_counter(self):
         now = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.UTC)
