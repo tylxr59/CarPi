@@ -25,7 +25,7 @@ The eventual “Hello World” means a Pi-generated frame with `Hello World`, `c
 
 ## Quick start
 
-On Raspberry Pi OS Lite 64-bit Trixie, separately power the Pi, enable SSH, then:
+On Raspberry Pi OS Lite 64-bit Trixie, set up the [3.3 V UART development console](docs/uart-console.md), power the Pi separately, and log in over UART, then:
 
 ```sh
 git clone <your-repository-url> carpi
@@ -42,9 +42,9 @@ Pair/trust the vehicle through `bluetoothctl` first if required. `--channel N` o
 
 ## First vehicle test
 
-1. Boot the Pi with its own power supply and SSH in.
+1. Boot the Pi with its own power supply and log in through the [UART console](docs/uart-console.md).
 2. Run read-only diagnostics: `sudo carpi bluetooth doctor` and `./scripts/doctor.sh` from the checkout. Confirm rfkill is unblocked and the adapter is visible.
-3. In a separate SSH session, optionally start a local capture: `sudo carpi capture bluetooth --output-dir captures`. Stop it with Ctrl+C after the probes. Captures may contain device identifiers, pairing information, protocol payloads, and credentials. Keep them private; CarPi never uploads them.
+3. Optionally start a local capture: `sudo carpi capture bluetooth --output-dir captures`. Use a terminal multiplexer on the Pi, if available, or a second SSH session so the UART shell stays available for the probe. Stop the capture with Ctrl+C after the probes. Captures may contain device identifiers, pairing information, protocol payloads, and credentials. Keep them private; CarPi never uploads them.
 4. Run the normal probe first: `sudo carpi probe --target AA:BB:CC:DD:EE:FF -vv`. Save the terminal output and its final state summary. Replace the MAC with your Subaru's address.
 5. If the normal probe reaches `Accessory authentication  UNVERIFIED - stopped`, run `sudo carpi probe --target AA:BB:CC:DD:EE:FF --allow-unverified-accessory -vv`. Save this output and final state summary too. A Wi-Fi SSID may appear; its password stays redacted.
 6. Stop the capture. Save the `.snoop` file locally with both probe logs, diagnostic output, time of test, and any pairing/connection observations. Review and redact before sharing. Do not proceed into CarPlay-over-IP yet.
@@ -60,8 +60,8 @@ sudo ./uninstall.sh --dry-run
 
 `video-demo` defaults to software `libx264`; `--encoder h264_v4l2m2m` attempts a Pi hardware path. Neither sends bytes to the vehicle. The installer neither starts nor enables its idle systemd unit.
 
-For reversible wired development, run `sudo carpi usb doctor`, `sudo carpi usb setup` (confirm separate power), `sudo carpi usb trace`, and `sudo carpi usb teardown`. Start with a Linux/macOS host to verify generic NCM enumeration. See [wired workflow](docs/wired-usb.md) and [wired research](docs/wired-usb-research.md). The optional `sudo ./install.sh --enable-usb-gadget` makes a backed-up `dwc2` boot edit only if needed. No USB service starts automatically.
+For reversible wired development, run `sudo carpi usb doctor`, `sudo carpi usb setup` (confirm separate power), `sudo carpi usb trace`, and `sudo carpi usb teardown` from the UART console. Start with a Linux/macOS host to verify generic NCM enumeration. See [wired workflow](docs/wired-usb.md) and [wired research](docs/wired-usb-research.md). The optional `sudo ./install.sh --enable-usb-gadget` makes a backed-up `dwc2` boot edit only if needed. No USB service starts automatically.
 
-See [bring-up](docs/bringup.md), [architecture](docs/architecture.md), [protocol notes](docs/protocol-notes.md), [upstream research](docs/upstream-research.md), and [troubleshooting](docs/troubleshooting.md).
+See [UART console and cabling](docs/uart-console.md), [bring-up](docs/bringup.md), [architecture](docs/architecture.md), [protocol notes](docs/protocol-notes.md), [upstream research](docs/upstream-research.md), and [troubleshooting](docs/troubleshooting.md).
 
 This work touches only infotainment projection. It has no CAN, ECU, diagnostic, vehicle control or safety-system functionality. Captures may expose identifiers and credentials; keep them private. No Apple binaries, private documents, certificates or keys are included.

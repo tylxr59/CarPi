@@ -2,6 +2,8 @@
 
 The Raspberry Pi must act as the **phone / iPhone / CarPlay source**. The Subaru is the **accessory / head unit / receiver**. Many public projects implement the reverse direction (iPhone → Pi); their working receiver paths cannot be presented as proof of a Pi → Subaru source.
 
+The [GPIO UART console](uart-console.md) is the primary developer connection to the Pi for commands and test output. It connects to a development computer and is separate from the Bluetooth, Wi-Fi, and USB links under test.
+
 ```mermaid
 flowchart LR
     P[Pi 4B: fake phone / source] -->|Bluetooth RFCOMM, iAP2| V[Subaru IVI: accessory / receiver]

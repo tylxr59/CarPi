@@ -1,9 +1,11 @@
 # Troubleshooting
 
-Run `scripts/doctor.sh` first. It avoids Wi-Fi secrets and Bluetooth keys.
+Log in over the [UART development console](uart-console.md) and run `scripts/doctor.sh` first. It avoids Wi-Fi secrets and Bluetooth keys.
 
 | Symptom | Next check |
 | --- | --- |
+| No UART login prompt | Check the adapter is 3.3 V TTL, GND is shared on physical pin 6, Pi TX pin 8 goes to adapter RX, and Pi RX pin 10 goes to adapter TX. Confirm 115200 8N1 with flow control off and press Enter. If still silent, inspect the card's boot partition on another computer: `config.txt` needs `enable_uart=1`, and the single-line `cmdline.txt` needs `console=serial0,115200`. Leave Bluetooth UART overlays unchanged. |
+| UART output is garbled or host cannot open the port | Verify baud rate and signal voltage, use a short secure lead, check the host's actual serial device and permissions, and confirm the Pi is separately powered. Do not connect the adapter's VCC pin. |
 | Installer refuses OS or architecture | Confirm this is the Pi OS Lite 64-bit target, not the development host or a container. `cat /etc/os-release`, `uname -m`. |
 | `bluetoothctl` finds no adapter | Check `rfkill list`, `systemctl status bluetooth`, and onboard radio configuration. |
 | `bluetooth doctor` reports ProfileManager1 missing or D-Bus binding error | Install `bluez python3-dbus python3-gi gir1.2-glib-2.0` on Pi OS; run `/usr/bin/python3 -c 'import dbus; from gi.repository import GLib'`. The doctor is read-only and cannot confirm registration permission. |
