@@ -1,0 +1,224 @@
+"""Conservative phone-role iAP2 probe.
+
+Stops after receiving an MFi response. It deliberately does not claim that the
+response is valid or send AuthenticationSucceeded without certificate validation.
+"""
+
+from __future__ import annotations
+
+import logging
+import secrets
+import socket
+import time
+from enum import Enum, auto
+
+from carpi.iap2 import (
+    ACK,
+    MARKER,
+    RST,
+    SYN,
+    TLV,
+    LinkParameters,
+    Message,
+    MessageStream,
+    Packet,
+    PacketStream,
+    ProtocolError,
+    summary,
+)
+
+LOG = logging.getLogger("carpi")
+
+
+class State(Enum):
+    CONNECTED = auto()
+    MARKER = auto()
+    NEGOTIATING = auto()
+    NEGOTIATED = auto()
+    IDENTIFYING = auto()
+    IDENTIFIED = auto()
+    AUTHENTICATING = auto()
+    AUTH_UNVERIFIED = auto()
+
+
+ALLOWED = {
+    State.CONNECTED: {State.MARKER},
+    State.MARKER: {State.NEGOTIATING},
+    State.NEGOTIATING: {State.NEGOTIATED},
+    State.NEGOTIATED: {State.IDENTIFYING},
+    State.IDENTIFYING: {State.IDENTIFIED},
+    State.IDENTIFIED: {State.AUTHENTICATING},
+    State.AUTHENTICATING: {State.AUTH_UNVERIFIED},
+}
+
+
+class Probe:
+    def __init__(self, sock: socket.socket, timeout: float = 20) -> None:
+        self.sock = sock
+        self.sock.settimeout(timeout)
+        self.timeout = timeout
+        self.state = State.CONNECTED
+        self.frames = PacketStream()
+        self.messages = MessageStream()
+        self.pending: list[Packet] = []
+        self.prefetched: list[Packet] = []
+        self.pending_messages: list[Message] = []
+        self.next_seq = 0
+        self.peer_seq: int | None = None
+        self.control_session: int | None = None
+        self.our_syn_seq: int | None = None
+
+    def transition(self, state: State) -> None:
+        if state not in ALLOWED.get(self.state, set()):
+            raise ProtocolError(f"invalid state transition {self.state.name} -> {state.name}")
+        self.state = state
+        LOG.info("[iap2] %s", state.name.lower())
+
+    def send(
+        self, control: int, payload: bytes = b"", session: int = 0, consume_seq: bool = False
+    ) -> None:
+        seq = self.next_seq
+        packet = Packet(control, seq, self.peer_seq or 0, session, payload)
+        self.sock.sendall(packet.encode())
+        LOG.debug(
+            "[iap2] tx control=0x%02x seq=%d ack=%d session=%d bytes=%d",
+            control,
+            seq,
+            packet.ack,
+            session,
+            len(payload),
+        )
+        if consume_seq:
+            self.next_seq = (seq + 1) & 0xFF
+
+    def receive(self) -> Packet:
+        deadline = time.monotonic() + self.timeout
+        while True:
+            if self.pending:
+                packet = self.pending.pop(0)
+                LOG.debug(
+                    "[iap2] rx control=0x%02x seq=%d ack=%d session=%d bytes=%d",
+                    packet.control,
+                    packet.seq,
+                    packet.ack,
+                    packet.session,
+                    len(packet.payload),
+                )
+                if packet.control & RST:
+                    raise ProtocolError("peer reset iAP2 link")
+                if packet.payload and not packet.control & SYN:
+                    expected = packet.seq if self.peer_seq is None else (self.peer_seq + 1) & 0xFF
+                    if packet.seq != expected:
+                        raise ProtocolError(
+                            f"out-of-order sequence: got {packet.seq}, expected {expected}"
+                        )
+                    self.peer_seq = packet.seq
+                    self.send(ACK)
+                return packet
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"timed out in {self.state.name.lower()}")
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise ConnectionError(f"peer closed in {self.state.name.lower()}")
+            self.pending.extend(self.frames.feed(chunk))
+
+    def next_message(self) -> Message:
+        deadline = time.monotonic() + self.timeout
+        while time.monotonic() <= deadline:
+            if self.pending_messages:
+                return self.pending_messages.pop(0)
+            packet = self.prefetched.pop(0) if self.prefetched else self.receive()
+            if (
+                packet.payload
+                and packet.session == self.control_session
+                and not packet.control & SYN
+            ):
+                messages = self.messages.feed(packet.payload)
+                if messages:
+                    for message in messages:
+                        LOG.info("[iap2] received %s", summary(message))
+                    self.pending_messages.extend(messages)
+        raise TimeoutError("timed out awaiting control message")
+
+    def expect(self, identifier: int) -> Message:
+        for _ in range(8):
+            message = self.next_message()
+            if message.identifier == identifier:
+                return message
+            if message.identifier in (0x1D03, 0xAA04):
+                raise ProtocolError(f"peer rejected stage with message 0x{message.identifier:04x}")
+            if message.identifier == 0x5703:
+                LOG.info("[wifi] unsolicited configuration: %s", summary(message))
+            else:
+                LOG.info("[iap2] interim message 0x%04x", message.identifier)
+        raise ProtocolError(f"expected message 0x{identifier:04x}; too many interim messages")
+
+    def send_message(self, identifier: int, parameters: tuple[TLV, ...] = ()) -> None:
+        if self.control_session is None:
+            raise ProtocolError("no control session negotiated")
+        LOG.info("[iap2] sending 0x%04x", identifier)
+        self.send(ACK, Message(identifier, parameters).encode(), self.control_session, True)
+
+    def run(self) -> State:
+        LOG.info("[bt] RFCOMM connected")
+        self.transition(State.MARKER)
+        self.sock.sendall(MARKER)
+        marker = bytearray()
+        while len(marker) < len(MARKER):
+            chunk = self.sock.recv(len(MARKER) - len(marker))
+            if not chunk:
+                raise ConnectionError("peer closed before iAP2 marker")
+            marker.extend(chunk)
+        if bytes(marker) != MARKER:
+            raise ProtocolError("iAP2 marker mismatch")
+        self.transition(State.NEGOTIATING)
+        for _ in range(8):
+            packet = self.receive()
+            if packet.control & SYN:
+                peer = LinkParameters.decode(packet.payload)
+                self.control_session = peer.control_session()
+                self.peer_seq = packet.seq
+                LOG.info(
+                    "[iap2] peer max_packet=%d control_session=%d",
+                    peer.max_packet,
+                    self.control_session,
+                )
+                break
+        else:
+            raise ProtocolError("peer sent too many packets before SYN")
+        self.our_syn_seq = self.next_seq
+        self.send(
+            SYN | ACK,
+            LinkParameters(8, min(peer.max_packet, 4096), 2000, 500, 3, 1, peer.sessions).encode(),
+            consume_seq=True,
+        )
+        for _ in range(4):
+            packet = self.receive()
+            if packet.payload and not packet.control & SYN:
+                self.prefetched.append(packet)
+            if packet.control & ACK and packet.ack == self.our_syn_seq:
+                break
+        else:
+            raise ProtocolError("peer did not ACK our SYN")
+        self.transition(State.NEGOTIATED)
+        self.transition(State.IDENTIFYING)
+        self.send_message(0x1D00)  # StartIdentification, empty body
+        identification = self.expect(0x1D01)
+        if not any(p.identifier == 0 and p.value for p in identification.parameters):
+            raise ProtocolError("identification lacks accessory name")
+        self.send_message(0x1D02)  # IdentificationAccepted, no credential claim
+        self.transition(State.IDENTIFIED)
+        self.transition(State.AUTHENTICATING)
+        self.send_message(0xAA00)  # RequestAuthenticationCertificate
+        certificate = self.expect(0xAA01)
+        if not any(p.identifier == 0 and p.value for p in certificate.parameters):
+            raise ProtocolError("empty authentication certificate")
+        self.send_message(0xAA02, (TLV(0, secrets.token_bytes(20)),))
+        response = self.expect(0xAA03)
+        if not any(p.identifier == 0 and p.value for p in response.parameters):
+            raise ProtocolError("empty authentication response")
+        self.transition(State.AUTH_UNVERIFIED)
+        LOG.warning(
+            "[auth] response received but NOT verified; stopping before AuthenticationSucceeded"
+        )
+        return self.state

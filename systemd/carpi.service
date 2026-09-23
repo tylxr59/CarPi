@@ -1,0 +1,16 @@
+# Installed by carpi
+[Unit]
+Description=carpi research daemon (idle; no automatic vehicle connection)
+After=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/carpi --config /etc/carpi/carpi.toml daemon
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/carpi
+
+[Install]
+WantedBy=multi-user.target

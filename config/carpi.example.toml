@@ -1,0 +1,17 @@
+[vehicle]
+name = "Subaru Crosstrek"
+bluetooth_mac = ""
+
+[logging]
+level = "info"
+packet_capture = false
+
+[video]
+width = 0
+height = 0
+fps = 30
+codec = "h264"
+
+[privacy]
+store_wifi_credentials = false
+log_payloads = false
